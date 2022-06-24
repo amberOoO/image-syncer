@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/AliyunContainerService/image-syncer/pkg/tools"
 	"gopkg.in/yaml.v2"
 )
 
@@ -107,8 +108,50 @@ func openAndDecode(filePath string, target interface{}) error {
 	return nil
 }
 
-// GetAuth gets the authentication information in Config
+// GetAuth gets the authentication information in Config with preprocessing for service like aws ecr
 func (c *Config) GetAuth(registry string, namespace string) (Auth, bool) {
+	// key of each AuthList item can be "registry/namespace" or "registry" only
+	registryAndNamespace := registry + "/" + namespace
+
+	if moreSpecificAuth, exist := c.AuthList[registryAndNamespace]; exist {
+		switch tools.RegistryDistinguisher(registryAndNamespace) {
+		case tools.AwsRegistry:
+			// awsRegistry need login before getting repo auth
+			awsHelper, err := tools.NewAwsHelperFromStaticConfig(moreSpecificAuth.Username, moreSpecificAuth.Password)
+			if err != nil {
+				return Auth{}, false
+			}
+			username, password, err := awsHelper.GetAuth()
+			if err != nil {
+				return Auth{}, false
+			}
+			return Auth{Username: username, Password: password, Insecure: moreSpecificAuth.Insecure}, true
+		default:
+			return moreSpecificAuth, exist
+		}
+	}
+
+	auth, exist := c.AuthList[registry]
+	switch tools.RegistryDistinguisher(registry) {
+	case tools.AwsRegistry:
+		awsHelper, err := tools.NewAwsHelperFromStaticConfig(auth.Username, auth.Password)
+		if err != nil {
+			return Auth{}, false
+		}
+		username, password, err := awsHelper.GetAuth()
+		if err != nil {
+			return Auth{}, false
+		}
+		return Auth{Username: username, Password: password, Insecure: auth.Insecure}, true
+	default:
+		return auth, exist
+	}
+}
+
+// GetAuth gets the authentication information in Config directly
+func (c *Config) GetRawAuth(registry string, namespace string) (Auth, bool) {
+	// preprocess for registry like aws which need login
+
 	// key of each AuthList item can be "registry/namespace" or "registry" only
 	registryAndNamespace := registry + "/" + namespace
 

@@ -265,6 +265,25 @@ func (c *Client) GenerateSyncTask(source string, destination string) ([]*URLPair
 	}
 
 	if auth, exist := c.config.GetAuth(destURL.GetRegistry(), destURL.GetNamespace()); exist {
+		// preprocess for service like aws ecr
+		switch tools.RegistryDistinguisher(destURL.GetRegistry()) {
+		case tools.AwsRegistry:
+			// aws ecr need to create repo before any operation
+			c.logger.Infof("Aws ecr auth find in url %v, username: %v", destURL.GetURL(), auth.Username)
+			rawAuth, _ := c.config.GetRawAuth(destURL.GetRegistry(), destURL.GetNamespace())
+			awsHelper, err := tools.NewAwsHelperFromStaticConfig(rawAuth.Username, rawAuth.Password)
+			if err != nil {
+				return nil, fmt.Errorf("generate %s image destination error: %v", destURL.GetURL(), err)
+			}
+			isExist := awsHelper.IsRepositoryExist(destURL.GetRepo())
+			if !isExist {
+				_, err = awsHelper.CreateRepository(destURL.GetRepo())
+				if err != nil {
+					return nil, fmt.Errorf("generate %s image destination error: %v", destURL.GetURL(), err)
+				}
+			}
+		}
+
 		c.logger.Infof("Find auth information for %v, username: %v", destURL.GetURL(), auth.Username)
 		imageDestination, err = sync.NewImageDestination(destURL.GetRegistry(), destURL.GetRepoWithNamespace(),
 			destTag, auth.Username, auth.Password, auth.Insecure)
