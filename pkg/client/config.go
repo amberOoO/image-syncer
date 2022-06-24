@@ -114,37 +114,35 @@ func (c *Config) GetAuth(registry string, namespace string) (Auth, bool) {
 	registryAndNamespace := registry + "/" + namespace
 
 	if moreSpecificAuth, exist := c.AuthList[registryAndNamespace]; exist {
-		switch tools.RegistryDistinguisher(registryAndNamespace) {
-		case tools.AwsRegistry:
-			// awsRegistry need login before getting repo auth
-			awsHelper, err := tools.NewAwsHelperFromStaticConfig(moreSpecificAuth.Username, moreSpecificAuth.Password)
-			if err != nil {
-				return Auth{}, false
-			}
-			username, password, err := awsHelper.GetAuth()
-			if err != nil {
-				return Auth{}, false
-			}
-			return Auth{Username: username, Password: password, Insecure: moreSpecificAuth.Insecure}, true
-		default:
-			return moreSpecificAuth, exist
-		}
+		exist = extraOperations(registry, &moreSpecificAuth)
+		return moreSpecificAuth, exist
 	}
 
-	auth, exist := c.AuthList[registry]
+	if auth, exist := c.AuthList[registry]; exist {
+		exist := extraOperations(registry, &auth)
+		return auth, exist
+	}
+
+	return Auth{}, false
+}
+
+// Extra operations for specific registries, for service like aws ecr need login to get registry auth
+func extraOperations(registry string, auth *Auth) bool {
 	switch tools.RegistryDistinguisher(registry) {
 	case tools.AwsRegistry:
 		awsHelper, err := tools.NewAwsHelperFromStaticConfig(auth.Username, auth.Password)
 		if err != nil {
-			return Auth{}, false
+			return false
 		}
 		username, password, err := awsHelper.GetAuth()
 		if err != nil {
-			return Auth{}, false
+			return false
 		}
-		return Auth{Username: username, Password: password, Insecure: auth.Insecure}, true
+		auth.Username = username
+		auth.Password = password
+		return true
 	default:
-		return auth, exist
+		return true
 	}
 }
 
