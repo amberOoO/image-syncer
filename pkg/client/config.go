@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/AliyunContainerService/image-syncer/pkg/db/service"
 	"github.com/AliyunContainerService/image-syncer/pkg/tools"
 	"gopkg.in/yaml.v2"
 )
@@ -67,6 +68,49 @@ func NewSyncConfig(configFile, authFilePath, imageFilePath, defaultDestRegistry,
 			return nil, fmt.Errorf("decode image file %v error: %v", imageFilePath, err)
 		}
 	}
+
+	config.defaultDestNamespace = defaultDestNamespace
+	config.defaultDestRegistry = defaultDestRegistry
+	config.osFilterList = osFilterList
+	config.archFilterList = archFilterList
+
+	return &config, nil
+}
+
+// NewSyncConfigFromDB creates a Config struct from database
+func NewSyncConfigFromDB(defaultDestRegistry, defaultDestNamespace string,
+	osFilterList, archFilterList []string) (*Config, error) {
+	var (
+		config       Config
+		authService  = service.NewAuthService()
+		imageService = service.NewImageService()
+		authMap      = make(map[string]Auth)
+		imageMap     = make(map[string]string)
+	)
+
+	// Get auth config from database
+	modelAuths, err := authService.GetAllAuth()
+	if err != nil {
+		panic(err)
+	}
+	for _, modelAuth := range modelAuths {
+		authMap[modelAuth.Registry] = Auth{
+			Username: modelAuth.Username,
+			Password: modelAuth.Password,
+			Insecure: modelAuth.Insecure,
+		}
+	}
+	config.AuthList = expandEnv(authMap)
+
+	// Get unsynced image config from database
+	modelImages, err := imageService.GetUnsyncImages()
+	if err != nil {
+		panic(err)
+	}
+	for _, modelImage := range modelImages {
+		imageMap[modelImage.GetSourceWithTag()] = modelImage.Destination
+	}
+	config.ImageList = imageMap
 
 	config.defaultDestNamespace = defaultDestNamespace
 	config.defaultDestRegistry = defaultDestRegistry

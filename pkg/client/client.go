@@ -6,13 +6,25 @@ import (
 	"strings"
 	sync2 "sync"
 
+	"github.com/AliyunContainerService/image-syncer/pkg/db/models"
+	"github.com/AliyunContainerService/image-syncer/pkg/db/service"
 	"github.com/AliyunContainerService/image-syncer/pkg/sync"
 	"github.com/AliyunContainerService/image-syncer/pkg/tools"
 	"github.com/sirupsen/logrus"
 )
 
+type ClientType int
+
+const (
+	NormalClient ClientType = iota
+	DBClient
+)
+
 // Client describes a synchronization client
 type Client struct {
+	// whether a command based client or db client. 0: command, 1: db.
+	clientType ClientType
+
 	// a sync.Task list
 	taskList *list.List
 
@@ -22,6 +34,9 @@ type Client struct {
 	// failed list
 	failedTaskList         *list.List
 	failedTaskGenerateList *list.List
+
+	// success list
+	successTaskList *list.List
 
 	config *Config
 
@@ -34,12 +49,43 @@ type Client struct {
 	urlPairListChan            chan int
 	failedTaskListChan         chan int
 	failedTaskGenerateListChan chan int
+	successTaskListChan        chan int
 }
 
 // URLPair is a pair of source and destination url
 type URLPair struct {
 	source      string
 	destination string
+}
+
+func NewSyncClientFromDB(logFile string, routineNum, retries int,
+	defaultDestRegistry, defaultDestNamespace string,
+	osFilterList, archFilterList []string) (*Client, error) {
+
+	logger := NewFileLogger(logFile)
+
+	config, err := NewSyncConfigFromDB(defaultDestRegistry, defaultDestNamespace, osFilterList, archFilterList)
+	if err != nil {
+		return nil, fmt.Errorf("generate config error: %v", err)
+	}
+
+	return &Client{
+		clientType:                 DBClient,
+		taskList:                   list.New(),
+		urlPairList:                list.New(),
+		failedTaskList:             list.New(),
+		failedTaskGenerateList:     list.New(),
+		successTaskList:            list.New(),
+		config:                     config,
+		routineNum:                 routineNum,
+		retries:                    retries,
+		logger:                     logger,
+		taskListChan:               make(chan int, 1),
+		urlPairListChan:            make(chan int, 1),
+		failedTaskListChan:         make(chan int, 1),
+		failedTaskGenerateListChan: make(chan int, 1),
+		successTaskListChan:        make(chan int, 1),
+	}, nil
 }
 
 // NewSyncClient creates a synchronization client
@@ -56,10 +102,12 @@ func NewSyncClient(configFile, authFile, imageFile, logFile string,
 	}
 
 	return &Client{
+		clientType:                 NormalClient,
 		taskList:                   list.New(),
 		urlPairList:                list.New(),
 		failedTaskList:             list.New(),
 		failedTaskGenerateList:     list.New(),
+		successTaskList:            list.New(),
 		config:                     config,
 		routineNum:                 routineNum,
 		retries:                    retries,
@@ -120,7 +168,11 @@ func (c *Client) Run() {
 					if err := task.Run(); err != nil {
 						// put to failedTaskList
 						c.PutAFailedTask(task)
+					} else {
+						// if success, put it to successTaskList
+						c.PutASuccessTask(task)
 					}
+
 				}
 			}()
 		}
@@ -166,6 +218,36 @@ func (c *Client) Run() {
 
 	fmt.Printf("Finished, %v sync tasks failed, %v tasks generate failed\n", c.failedTaskList.Len(), c.failedTaskGenerateList.Len())
 	c.logger.Infof("Finished, %v sync tasks failed, %v tasks generate failed", c.failedTaskList.Len(), c.failedTaskGenerateList.Len())
+
+	// if clientType == DBClient, update sync status of image from false to true
+	if c.clientType == DBClient {
+		imageService := service.NewImageService()
+		for task := c.successTaskList.Front(); task != nil; task = task.Next() {
+
+			task := task.Value.(*sync.Task)
+
+			// TODO: error handle
+			source, _ := task.GetSource().GetFullUrl()
+			dest, _ := task.GetDestination().GetFullUrl()
+
+			sourceAndTag := strings.Split(source, ":")
+			destAndTag := strings.Split(dest, ":")
+			if len(sourceAndTag) == 1 {
+				sourceUrl := sourceAndTag[0]
+				destUrl := destAndTag[0]
+				image := &models.Image{Source: sourceUrl, Destination: destUrl}
+				imageService.UpdateImageSyncStatus(image, true)
+			}
+			if len(sourceAndTag) == 2 {
+				sourceUrl := sourceAndTag[0]
+				tag := sourceAndTag[1]
+				destUrl := destAndTag[0]
+				image := &models.Image{Source: sourceUrl, Tag: tag, Destination: destUrl}
+				imageService.UpdateImageSyncStatus(image, true)
+			}
+		}
+	}
+
 }
 
 // GenerateSyncTask creates synchronization tasks from source and destination url, return URLPair array if there are more than one tags
@@ -387,6 +469,18 @@ func (c *Client) PutAFailedTask(failedTask *sync.Task) {
 
 	if c.failedTaskList != nil {
 		c.failedTaskList.PushBack(failedTask)
+	}
+}
+
+// PutASuccessTask puts a success task to successTaskTaskList
+func (c *Client) PutASuccessTask(successTask *sync.Task) {
+	c.successTaskListChan <- 1
+	defer func() {
+		<-c.successTaskListChan
+	}()
+
+	if c.successTaskList != nil {
+		c.successTaskList.PushBack(successTask)
 	}
 }
 

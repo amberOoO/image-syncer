@@ -182,3 +182,13 @@ func (t *Task) Errorf(format string, args ...interface{}) error {
 func (t *Task) Infof(format string, args ...interface{}) {
 	t.logger.Infof(format, args...)
 }
+
+// GetSource get source image
+func (t *Task) GetSource() *ImageSource {
+	return t.source
+}
+
+// GetSource get destination image
+func (t *Task) GetDestination() *ImageDestination {
+	return t.destination
+}

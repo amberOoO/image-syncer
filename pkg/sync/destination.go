@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/AliyunContainerService/image-syncer/pkg/tools"
 	"github.com/containers/image/v5/docker"
@@ -134,4 +135,11 @@ func (i *ImageDestination) GetRepository() string {
 // GetTag return the tag of a ImageDestination
 func (i *ImageDestination) GetTag() string {
 	return i.tag
+}
+
+// GetFullUrl full url of target image
+func (i *ImageDestination) GetFullUrl() (string, error) {
+	url := strings.Join([]string{i.registry, i.repository}, "/")
+	url = strings.Join([]string{url, i.tag}, ":")
+	return url, nil
 }
